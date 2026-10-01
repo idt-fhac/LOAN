@@ -69,7 +69,10 @@ return [
     |
     */
 
-    'timezone' => 'UTC',
+    // Alle Zeiten werden als Ortszeit eingegeben und angezeigt. Laravel
+    // speichert ohne Offset in dieser Zone - spaeter umstellen hiesse,
+    // alle gespeicherten Zeitpunkte zu migrieren.
+    'timezone' => 'Europe/Berlin',
 
     /*
     |--------------------------------------------------------------------------

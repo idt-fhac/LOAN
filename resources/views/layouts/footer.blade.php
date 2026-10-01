@@ -23,7 +23,7 @@
                         <p class="text-gray-300 transition-colors duration-200 font-normal mt-2 mr-2 mb-6">
                             <em><strong>LOAN | {{ __('Das System zur Geräteausleihe') }}</strong></em> {{ __('von') }} <a
                                 href="https://github.com/dusanvin" class="hover:underline" target="_blank"
-                                rel="noopener"><strong>Vincent Dusanek</strong></a>, 2024. {{ __('MIT-Lizenz') }}.</p>
+                                rel="noopener"><strong>Vincent Dusanek</strong></a>, 2024. <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" class="hover:underline" target="_blank" rel="noopener">CC BY-NC-SA 4.0</a>.</p>
                         <div
                             class="inline-flex items-stretch rounded-md overflow-hidden border border-gray-300 text-gray-300 text-xs">
                             <!-- Star-Button -->
