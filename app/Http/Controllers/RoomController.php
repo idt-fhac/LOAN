@@ -2,179 +2,186 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
-use App\Models\Room;
+use App\Http\Controllers\Concerns\HandlesReservations;
 use App\Models\Reservation;
+use App\Models\Room;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 
 class RoomController extends Controller
 {
-    // Lädt die Raumübersicht
+    use HandlesReservations;
+
+    public function __construct()
+    {
+        $this->middleware('auth');
+    }
+
     public function index()
     {
-        $rooms = Room::all(); // Alle Räume laden
-        return view('rooms.index', compact('rooms')); // rooms.index.blade.php anzeigen
+        $this->authorize('viewAny', Room::class);
+
+        $rooms = Room::orderBy('name')->get();
+
+        return view('rooms.index', compact('rooms'));
     }
 
-    // Lädt aktuelle Raumbuchungen
+    /** Aktuelle Raumbuchungen. Nutzende sehen nur die eigenen, Moderation alle. */
     public function reservations()
     {
-        $rooms = Room::all(); // Alle Räume laden
-        $reservations = Reservation::with('room', 'user')
-            ->where(function ($query) {
-                $query->where('end_date', '>', now()->format('Y-m-d'))
-                    ->orWhere(function ($query) {
-                        $query->where('end_date', '=', now()->format('Y-m-d'))
-                            ->where('end_time', '>', now()->format('H:i'));
-                    });
-            })
-            ->get(); // Nur aktuelle Reservierungen laden
-    
-        return view('reservations.index', compact('rooms', 'reservations')); // reservations/index.blade.php anzeigen
+        $this->authorize('viewAny', Reservation::class);
+
+        $rooms = Room::orderBy('name')->get();
+
+        $reservations = $this->scopedRoomReservations()->upcoming()->orderBy('starts_at')->get();
+
+        return view('reservations.index', compact('rooms', 'reservations'));
     }
 
-    // Lädt archivierte Raumbuchungen
     public function archived()
     {
-        $rooms = Room::all(); // Alle Räume laden
-        $reservations = Reservation::with('room', 'user')
-            ->where(function ($query) {
-                $query->where('end_date', '<', now()->format('Y-m-d'))
-                    ->orWhere(function ($query) {
-                        $query->where('end_date', '=', now()->format('Y-m-d'))
-                            ->where('end_time', '<', now()->format('H:i'));
-                    });
-            })
-            ->get(); // Nur archivierte Reservierungen laden
-    
-        return view('reservations.archived', compact('rooms', 'reservations')); // reservations/archived.blade.php anzeigen
+        $this->authorize('viewAny', Reservation::class);
+
+        $rooms = Room::orderBy('name')->get();
+
+        $reservations = $this->scopedRoomReservations()->past()->orderByDesc('starts_at')->get();
+
+        return view('reservations.archived', compact('rooms', 'reservations'));
     }
 
     public function create()
     {
+        $this->authorize('create', Room::class);
+
         return view('rooms.create');
+    }
+
+    public function store(Request $request)
+    {
+        $this->authorize('create', Room::class);
+
+        $validated = $request->validate($this->roomRules());
+
+        Room::create($validated);
+
+        return redirect()->route('rooms.index')->with('status', __('Raum erfolgreich hinzugefügt!'));
     }
 
     public function edit(Room $room)
     {
+        $this->authorize('update', $room);
+
         return view('rooms.edit', compact('room'));
     }
 
     public function update(Request $request, Room $room)
     {
-        $request->validate([
-            'name' => 'required|string|max:255',
-            'description' => 'required|string|max:255',
-            'location' => 'required|string|max:255',
-        ]);
+        $this->authorize('update', $room);
 
-        $room->update($request->all());
+        // Frueher $room->update($request->all()) - damit liess sich jedes
+        // fillable Feld ueberschreiben. Jetzt nur noch geprueftes Eingabe.
+        $room->update($request->validate($this->roomRules()));
 
-        return redirect()->route('rooms.index')->with('status', 'Raum erfolgreich aktualisiert!');
+        return redirect()->route('rooms.index')->with('status', __('Raum erfolgreich aktualisiert!'));
     }
 
     public function destroy(Room $room)
     {
+        $this->authorize('delete', $room);
+
         $room->delete();
 
-        return redirect()->route('rooms.index')->with('status', 'Raum erfolgreich gelöscht!');
-    }
-
-    public function store(Request $request)
-    {
-        $request->validate([
-            'name' => 'required|string|max:255',
-            'description' => 'required|string|max:255',
-            'location' => 'required|string|max:255',
-            'new_column' => 'nullable|string|max:255', // Jetzt ist es optional
-        ]);
-
-        Room::create([
-            'name' => $request->name,
-            'description' => $request->description,
-            'location' => $request->location,
-            'new_column' => $request->new_column ?? 'Standardwert', // Standardwert setzen oder NULL erlauben
-        ]);
-
-        return redirect()->route('rooms.index')->with('status', 'Raum erfolgreich hinzugefügt!');
+        return redirect()->route('rooms.index')->with('status', __('Raum erfolgreich gelöscht!'));
     }
 
     public function reserve(Room $room)
     {
+        $this->authorize('reserve', $room);
+
         return view('rooms.reserve', compact('room'));
     }
 
     public function storeReservation(Request $request, Room $room)
     {
-        // Validierung der Eingabedaten
-        $request->validate([
-            'start_date' => 'required|date',
-            'start_time' => 'required|date_format:H:i',
-            'end_date' => 'required|date|after_or_equal:start_date',
-            'end_time' => 'required|date_format:H:i|after:start_time',
-            'purpose' => 'required|string|max:100',
+        $this->authorize('reserve', $room);
+
+        $validated = $request->validate($this->reservationRules());
+
+        [$start, $end] = $this->reservationWindow($validated);
+        $purpose       = $this->assertWordLimit($validated['purpose'] ?? null);
+        $this->assertNoOverlap($room, $start, $end);
+
+        $room->reservations()->create([
+            'user_id'          => Auth::id(),
+            'reserved_by_name' => $this->reservedByName($request->input('reserved_by_name')),
+            'starts_at'        => $start,
+            'ends_at'          => $end,
+            'purpose'          => $purpose,
+            'status'           => Reservation::STATUS_APPROVED, // Raeume werden nicht genehmigt
         ]);
 
-        try {
-            // Reservierung speichern
-            Reservation::create([
-                'room_id' => $room->id,
-                'user_id' => auth()->id(),
-                'start_date' => $request->start_date,
-                'start_time' => $request->start_time,
-                'end_date' => $request->end_date,
-                'end_time' => $request->end_time,
-                'purpose' => $request->purpose,
-            ]);
-
-            // Erfolgreiche Reservierung - Weiterleitung zur Übersicht
-            return redirect()->route('rooms.index')->with('status', 'Raum erfolgreich reserviert!');
-        } catch (\Exception $e) {
-            // Fehlerbehandlung - zurück zur vorherigen Seite mit einer Fehlermeldung
-            return redirect()->back()->withErrors('Fehler bei der Reservierung: ' . $e->getMessage());
-        }
-    }
-    
-
-    public function cancelReservation(Reservation $reservation)
-    {
-        $reservation->delete();
-
-        return redirect()->route('reservations.index')->with('status', 'Reservierung erfolgreich aufgehoben!');
+        return redirect()->route('rooms.index')->with('status', __('Raum erfolgreich reserviert!'));
     }
 
     public function editReservation(Reservation $reservation)
     {
+        $this->authorize('update', $reservation);
+
         $room = $reservation->room;
+
         return view('reservations.edit', compact('reservation', 'room'));
     }
 
     public function updateReservation(Request $request, Reservation $reservation)
     {
-        // Validierung der Eingabedaten
-        $request->validate([
-            'start_date' => 'required|date',
-            'start_time' => 'required|date_format:H:i',
-            'end_date' => 'required|date|after_or_equal:start_date',
-            'end_time' => 'required|date_format:H:i',
-            'purpose' => 'required|string|max:100',
+        $this->authorize('update', $reservation);
+
+        $validated = $request->validate($this->reservationRules());
+
+        [$start, $end] = $this->reservationWindow($validated);
+        $purpose       = $this->assertWordLimit($validated['purpose'] ?? null);
+        $this->assertNoOverlap($reservation->reservable, $start, $end, $reservation->id);
+
+        // Objekt und Eigentuemer bleiben unveraendert - sonst liesse sich eine
+        // Buchung per Formularfeld einem anderen Konto unterschieben.
+        $reservation->update([
+            'starts_at' => $start,
+            'ends_at'   => $end,
+            'purpose'   => $purpose,
         ]);
 
-        try {
-            // Reservierung aktualisieren
-            $reservation->update([
-                'start_date' => $request->start_date,
-                'start_time' => $request->start_time,
-                'end_date' => $request->end_date,
-                'end_time' => $request->end_time,
-                'purpose' => $request->purpose,
-            ]);
-
-            // Erfolgreiche Reservierung - Weiterleitung zur Übersicht
-            return redirect()->route('reservations.index')->with('status', 'Reservierung erfolgreich aktualisiert!');
-        } catch (\Exception $e) {
-            // Fehlerbehandlung - zurück zur vorherigen Seite mit einer Fehlermeldung
-            return redirect()->back()->withErrors('Fehler bei der Aktualisierung: ' . $e->getMessage());
-        }
+        return redirect()->route('reservations.index')
+            ->with('status', __('Reservierung erfolgreich aktualisiert!'));
     }
 
+    public function cancelReservation(Reservation $reservation)
+    {
+        $this->authorize('delete', $reservation);
+
+        $reservation->delete();
+
+        return redirect()->route('reservations.index')
+            ->with('status', __('Reservierung erfolgreich aufgehoben!'));
+    }
+
+    private function roomRules(): array
+    {
+        return [
+            'name'        => ['required', 'string', 'max:255'],
+            'description' => ['nullable', 'string', 'max:500'],
+            'location'    => ['required', 'string', 'max:255'],
+            'capacity'    => ['nullable', 'integer', 'min:1', 'max:2000'],
+        ];
+    }
+
+    /** Basisquery: Moderation sieht alle Buchungen, alle anderen nur die eigenen. */
+    private function scopedRoomReservations()
+    {
+        $user = Auth::user();
+
+        return Reservation::query()
+            ->forRooms()
+            ->with(['reservable', 'user'])
+            ->unless($user->isModerator(), fn ($q) => $q->where('user_id', $user->id));
+    }
 }
