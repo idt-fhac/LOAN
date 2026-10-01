@@ -1,3 +1,130 @@
-@import "tailwindcss/base";
-@import "tailwindcss/components";
-@import "tailwindcss/utilities";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * FH Aachen - Designtokens.
+ *
+ * Spiegelt project/tokens.json aus dem Design System "FH Aachen Design System".
+ * Die Variablen stehen hier fuer Stellen, an denen kein Utility greift:
+ * Formularelemente, Fokusringe, Bildlaufleisten.
+ */
+:root {
+    /* Farbdreiklang */
+    --fh-mint: #00B2A9;
+    --fh-black: #000000;
+    --fh-white: #FFFFFF;
+    --fh-silver: #8A8D8F;
+
+    /* Mint-Rampe */
+    --fh-mint-300: #4DCBC4;
+    --fh-mint-700: #007A74;
+    --fh-mint-800: #00524E;
+    --fh-mint-900: #002B29;
+    --fh-mint-tint: #B3E6E3;
+    --fh-mint-wash: #E6F7F6;
+
+    /* Graustufen */
+    --fh-gray-100: #F2F2F2;
+    --fh-gray-200: #E0E0E0;
+    --fh-gray-300: #CCCCCC;
+    --fh-gray-400: #B3B3B3;
+    --fh-gray-500: #808080;
+    --fh-gray-600: #666666;
+    --fh-gray-700: #4D4D4D;
+    --fh-gray-900: #1A1A1A;
+
+    /* Semantisch */
+    --text-primary: var(--fh-black);
+    --text-secondary: var(--fh-gray-700);
+    --text-muted: var(--fh-gray-500);
+    --text-on-mint: var(--fh-black);
+    --text-accent: var(--fh-mint-800);
+    --border-default: var(--fh-gray-300);
+    --border-strong: var(--fh-black);
+    --accent: var(--fh-mint);
+    --accent-hover: var(--fh-mint-700);
+    --accent-pressed: var(--fh-mint-800);
+
+    /* Status */
+    --status-success: #1E7A45;
+    --status-warning: #9A6B00;
+    --status-error: #B3261E;
+    --status-error-wash: #F8E6E5;
+
+    /* Bewegung und Form */
+    --shadow-focus: 0 0 0 3px rgba(0, 178, 169, 0.45);
+    --ease-standard: cubic-bezier(0.2, 0, 0.2, 1);
+    --dur-fast: 120ms;
+    --dur-base: 200ms;
+}
+
+@layer base {
+    html {
+        -webkit-text-size-adjust: 100%;
+    }
+
+    body {
+        @apply bg-white text-gray-800 antialiased;
+    }
+
+    /* Fliesstext ist Schwarz auf Weiss - Mint traegt hier keinen Text. */
+    h1, h2, h3, h4 {
+        @apply text-gray-900;
+        text-wrap: balance;
+    }
+
+    /* Linksbuendiger Flattersatz, nie Blocksatz. */
+    p, li, dd {
+        text-align: left;
+    }
+
+    /* Fokus: Mint-Rand plus 3px-Ring, wie im Design System. */
+    :focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 0;
+        box-shadow: var(--shadow-focus);
+    }
+
+    [type='text'], [type='email'], [type='password'], [type='number'],
+    [type='date'], [type='time'], [type='search'], select, textarea {
+        @apply border-gray-300 text-gray-800;
+        border-radius: 2px;
+        transition: border-color var(--dur-fast) var(--ease-standard);
+    }
+
+    [type='text']:hover, [type='email']:hover, [type='password']:hover,
+    [type='number']:hover, [type='date']:hover, [type='time']:hover,
+    [type='search']:hover, select:hover, textarea:hover {
+        border-color: var(--border-strong);
+    }
+
+    [type='checkbox'], [type='radio'] {
+        @apply border-gray-400;
+        color: var(--accent);
+    }
+}
+
+@layer components {
+    /* Statuskennzeichnung: Form UND Farbe, damit sie ohne Farbsehen lesbar ist. */
+    .fh-chip {
+        @apply inline-flex items-center gap-2 h-6 px-2.5 text-[11px] font-bold uppercase tracking-wider whitespace-nowrap;
+    }
+    .fh-chip-available { @apply bg-yellow-100 text-gray-900; }
+    .fh-chip-loaned    { @apply bg-gray-100 text-gray-700; }
+    .fh-chip-overdue   { @apply bg-white text-red-600 border border-red-600; }
+    .fh-chip-pending   { @apply bg-white text-gray-900 border border-gray-900; }
+    .fh-chip-approved  { @apply bg-yellow-400 text-gray-900; }
+
+    /* Mint-Regel als Akzent: Kartenoberkante, aktiver Reiter, Hinweisleiste. */
+    .fh-rule-top  { border-top: 3px solid var(--accent); }
+    .fh-rule-left { border-left: 3px solid var(--accent); }
+
+    /* Tabellenzahlen stehen untereinander. */
+    .fh-num { font-variant-numeric: tabular-nums; }
+}
+
+/* Dezente Bildlaufleisten in den dunklen Flaechen. */
+@supports (scrollbar-color: black white) {
+    .fh-rail { scrollbar-color: #4D4D4D #000000; scrollbar-width: thin; }
+}
