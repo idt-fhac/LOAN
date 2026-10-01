@@ -71,9 +71,8 @@
             <div class="mb-4">
                 <label for="category_id" class="block text-sm font-medium mb-1">Kategorie</label>
                 <select name="category_id" id="category_id"
-                    class="bg-gray-50 focus:ring-gray-500 focus:border-gray-500 border-gray-300 appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight"
-                    required>
-                    <option value="" selected disabled>Bitte wählen…</option>
+                    class="bg-gray-50 focus:ring-gray-500 focus:border-gray-500 border-gray-300 appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+                    <option value="" @selected(old('category_id') === null || old('category_id') === '')>Keine Kategorie</option>
                     @foreach ($categories as $cat)
                         <option value="{{ $cat->id }}" {{ old('category_id') == $cat->id ? 'selected' : '' }}>
                             {{ $cat->name }}
@@ -84,6 +83,26 @@
                     <div class="text-red-600 mt-1">{{ $message }}</div>
                 @enderror
             </div>
+            <div class="mb-4">
+                <label for="manufacturer" class="block text-gray-700 text-sm font-bold mb-2">Hersteller (optional):</label>
+                <input type="text" name="manufacturer" id="manufacturer"
+                    class="bg-gray-50 focus:ring-gray-500 focus:border-gray-500 border-gray-300 appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight"
+                    value="{{ old('manufacturer') }}">
+            </div>
+
+            <div class="mb-4">
+                <label for="quantity" class="block text-gray-700 text-sm font-bold mb-2">Anzahl baugleicher Exemplare:</label>
+                <input type="number" name="quantity" id="quantity" min="1" max="50"
+                    class="bg-gray-50 focus:ring-gray-500 focus:border-gray-500 border-gray-300 appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight"
+                    value="{{ old('quantity', 1) }}">
+                <p class="mt-1 text-xs text-gray-500">
+                    Bei mehreren Exemplaren wird derselbe Gerätetyp entsprechend oft angelegt.
+                </p>
+                @error('quantity')
+                    <div class="text-red-600 mt-1">{{ $message }}</div>
+                @enderror
+            </div>
+
             <div class="mb-4">
                 <button type="submit"
                     class="bg-gray-600 hover:bg-gray-800 border-gray-300 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">Gerät

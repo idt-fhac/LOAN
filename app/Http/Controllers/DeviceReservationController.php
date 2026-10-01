@@ -2,103 +2,84 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\HandlesReservations;
 use App\Models\Device;
-use App\Models\DeviceReservation;
+use App\Models\Reservation;
 use Illuminate\Http\Request;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 
+/**
+ * Geraetevormerkungen. Liegen seit dem Zielmodell auf derselben Tabelle wie
+ * Raumbuchungen - die gemeinsame Logik steckt in HandlesReservations.
+ */
 class DeviceReservationController extends Controller
 {
+    use HandlesReservations;
+
     public function __construct()
     {
         $this->middleware('auth');
     }
 
-    // Formular anzeigen (wie bei Räumen, nur für Devices)
     public function create(Device $device)
     {
-        return view('devices.reservations.create', [
-            'device' => $device
-        ]);
+        $this->authorize('create', Reservation::class);
+
+        return view('devices.reservations.create', compact('device'));
     }
 
-    // Vormerkung speichern
     public function store(Request $request, Device $device)
     {
-        // 1) Basiseingaben prüfen
-        $validated = $request->validate([
-            'start_date' => ['required','date'],
-            'start_time' => ['required','date_format:H:i'],
-            'end_date'   => ['required','date','after_or_equal:start_date'],
-            'end_time'   => ['required','date_format:H:i'],
-            'purpose'    => ['nullable','string','max:255'],
-            'reserved_by_name' => ['nullable','string','max:255'],
+        $this->authorize('create', Reservation::class);
+
+        $validated = $request->validate($this->reservationRules());
+
+        [$start, $end] = $this->reservationWindow($validated);
+        $purpose       = $this->assertWordLimit($validated['purpose'] ?? null);
+        $this->assertNoOverlap($device, $start, $end);
+
+        $device->reservations()->create([
+            'user_id'          => Auth::id(),
+            'reserved_by_name' => $this->reservedByName($request->input('reserved_by_name')),
+            'starts_at'        => $start,
+            'ends_at'          => $end,
+            'purpose'          => $purpose,
+            'status'           => Reservation::STATUS_PENDING,
         ]);
 
-        $start = Carbon::createFromFormat('Y-m-d H:i', $validated['start_date'].' '.$validated['start_time']);
-        $end   = Carbon::createFromFormat('Y-m-d H:i', $validated['end_date'].' '.$validated['end_time']);
-
-        if ($end->lessThanOrEqualTo($start)) {
-            return back()->withErrors(['end_time' => 'Ende muss nach dem Start liegen.'])
-                         ->withInput();
-        }
-
-        // 2) Wortlimit (<= 100 Wörter) serverseitig erzwingen
-        $wordCount = str_word_count((string)($validated['purpose'] ?? ''), 0, 'ÄÖÜäöüß');
-        if ($wordCount > 100) {
-            return back()->withErrors(['purpose' => 'Bitte höchstens 100 Wörter. (Aktuell: '.$wordCount.')'])
-                         ->withInput();
-        }
-
-        // 3) Terminüberschneidungen prüfen (keine Überschneidung mit bestehenden aktiven Vormerkungen)
-        $overlaps = $device->reservations()
-            ->where('status', '!=', 'cancelled')
-            ->where(function ($q) use ($start, $end) {
-                $q->whereBetween('start_at', [$start, $end])
-                  ->orWhereBetween('end_at', [$start, $end])
-                  ->orWhere(function ($q2) use ($start, $end) {
-                      $q2->where('start_at', '<=', $start)
-                         ->where('end_at', '>=', $end);
-                  });
-            })
-            ->exists();
-
-        if ($overlaps) {
-            return back()->withErrors(['start_date' => 'Dieser Zeitraum überschneidet sich mit einer bestehenden Vormerkung.'])
-                         ->withInput();
-        }
-
-        // 4) Vormerkung anlegen
-        DeviceReservation::create([
-            'device_id' => $device->id,
-            'user_id'   => Auth::id(),
-            'start_at'  => $start,
-            'end_at'    => $end,
-            'purpose'   => $validated['purpose'] ?? null,
-            'reserved_by_name' => $request->input('reserved_by_name'),
-            'status'    => 'pending',
-        ]);
-
-        return redirect()
-            ->route('devices.show', $device) // passe an, falls deine Show‑Route anders heißt
-            ->with('success', 'Gerät wurde erfolgreich vorgemerkt.');
+        return redirect()->route('devices.show', $device)
+            ->with('success', __('Gerät wurde erfolgreich vorgemerkt.'));
     }
-    public function destroy(DeviceReservation $reservation)
+
+    public function destroy(Reservation $reservation)
     {
-        // Nur der Ersteller darf seine Vormerkung widerrufen
-        if ($reservation->user_id !== auth()->id()) {
-            abort(403, 'Unbefugt');
-        }
+        // Policy: Eigentuemer oder Moderation.
+        $this->authorize('delete', $reservation);
 
-        // Entweder löschen...
-        // $reservation->delete();
+        $reservation->update(['status' => Reservation::STATUS_CANCELLED]);
 
-        // ...oder Status auf "cancelled" setzen (empfohlen, falls du Historie behalten willst):
-        $reservation->update(['status' => 'cancelled']);
-
-        return back()->with('status', 'Die Vormerkung wurde widerrufen.');
+        return back()->with('status', __('Die Vormerkung wurde widerrufen.'));
     }
 
-}
+    /** Vormerkung genehmigen oder ablehnen - nur Moderation. */
+    public function decide(Request $request, Reservation $reservation)
+    {
+        $this->authorize('decide', $reservation);
 
+        $validated = $request->validate([
+            'decision' => ['required', 'in:approve,reject'],
+        ]);
+
+        $reservation->update([
+            'status' => $validated['decision'] === 'approve'
+                ? Reservation::STATUS_APPROVED
+                : Reservation::STATUS_REJECTED,
+            'decided_by_id' => Auth::id(),
+            'decided_at'    => now(),
+        ]);
+
+        return back()->with('status', $validated['decision'] === 'approve'
+            ? __('Die Vormerkung wurde genehmigt.')
+            : __('Die Vormerkung wurde abgelehnt.'));
+    }
+}

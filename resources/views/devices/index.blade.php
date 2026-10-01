@@ -85,6 +85,7 @@
 
 
             <div class="mb-4 flex justify-end gap-3">
+                @can('manage-inventory')
                 <!-- Gerät hinzufügen -->
                 <a href="{{ route('devices.create') }}"
                     class="inline-flex items-center pl-3 pr-4 py-2 rounded-md bg-gray-600 text-white text-sm font-medium hover:bg-yellow-600">
@@ -95,6 +96,7 @@
                     </svg>
                     Gerät hinzufügen
                 </a>
+                @endcan
 
                 <!-- Kategorien verwalten -->
                 <a href="{{ route('categories.index') }}"
@@ -299,6 +301,7 @@
                                         class="inline-flex items-center px-4 py-2 rounded bg-gray-600 hover:bg-gray-800 text-white text-xs font-medium">
                                         Vormerken
                                     </button>
+                                    @can('manage-inventory')
                                     <a href="{{ route('devices.edit', $device) }}"
                                         class="py-2 pl-2 lg:pl-6 pr-2 rounded text-gray-300 hover:text-white">
                                         <svg height="16" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
@@ -323,6 +326,7 @@
                                             </svg>
                                         </button>
                                     </form>
+                                    @endcan
                                 </div>
                             </td>
                         </tr>
@@ -369,8 +373,12 @@
                                         <label for="borrower_name" class="block text-gray-700 text-sm font-bold mb-2">Name
                                             der Person:</label>
                                         <input type="text" name="borrower_name" id="borrower_name"
-                                            class="bg-gray-50 focus:ring-gray-500 focus:border-gray-500 border-gray-300 appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight"
-                                            required placeholder="An wen wird das Gerät verliehen?">
+                                            class="bg-gray-50 focus:ring-gray-500 focus:border-gray-500 border-gray-300 appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight @cannot('manage-inventory') bg-gray-200 @endcannot"
+                                            required placeholder="An wen wird das Gerät verliehen?"
+                                            @cannot('manage-inventory') value="{{ auth()->user()->name }}" readonly @endcannot>
+                                        @cannot('manage-inventory')
+                                            <p class="mt-1 text-xs text-gray-500">Du kannst Geräte nur auf deinen eigenen Namen ausleihen.</p>
+                                        @endcannot
                                     </div>
                                     <div class="mb-4">
                                         <label for="loan_start_date"

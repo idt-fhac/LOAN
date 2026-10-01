@@ -4,173 +4,364 @@ namespace App\Http\Controllers;
 
 use App\Models\Category;
 use App\Models\Device;
-use App\Models\DeviceHistory;
-use App\Models\DeviceReservation;
+use App\Models\DeviceModel;
+use App\Models\Loan;
+use App\Models\Reservation;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class DeviceController extends Controller
 {
+    public function __construct()
+    {
+        $this->middleware('auth');
+    }
+
+    /** Eager Loading fuer alles, was die Accessoren des Device brauchen. */
+    private function deviceQuery()
+    {
+        return Device::with(['deviceModel.category', 'openLoan.user']);
+    }
+
     public function index()
     {
-        // Optional: Eager Loading für die Kategorie
-        $devices = Device::with('category')->get();
+        $this->authorize('viewAny', Device::class);
+
+        $devices = $this->deviceQuery()->get()
+            ->sortBy(fn (Device $d) => [$d->group ?? '', $d->title])
+            ->values();
+
         return view('devices.index', compact('devices'));
     }
 
     public function show(Device $device)
     {
-        $histories = DeviceHistory::where('device_id', $device->id)
-            ->orderBy('created_at', 'desc')
-            ->get();
+        $this->authorize('view', $device);
+
+        $device->load(['deviceModel.category', 'openLoan.user']);
+
+        // Die Views erwarten eine flache Vorgangsliste. Aus jeder Ausleihe
+        // werden bis zu zwei Eintraege: Ausgabe und Rueckgabe.
+        $histories = Auth::user()->can('viewHistory', $device)
+            ? $this->historyFor($device)
+            : collect();
 
         return view('devices.show', compact('device', 'histories'));
     }
 
-    public function loan(Request $request)
+    private function historyFor(Device $device)
     {
-        $request->validate([
-            'borrower_name'   => 'required|string|max:255',
-            'loan_start_date' => 'required|date',
-            'loan_end_date'   => 'required|date|after_or_equal:loan_start_date',
-            'loan_purpose'    => 'nullable|string|max:255',
-        ]);
+        return $device->loans()
+            ->with(['issuedBy', 'returnedTo'])
+            ->latest('checked_out_at')
+            ->get()
+            ->flatMap(function (Loan $loan) {
+                $entries = [(object) [
+                    'created_at' => $loan->checked_out_at,
+                    'action'     => 'loaned',
+                    'user_name'  => $loan->borrower_name,
+                    'action_by'  => $loan->issuedBy?->name ?? $loan->borrower_name,
+                ]];
 
-        $device = Device::findOrFail($request->device_id);
-        $device->status = 'loaned';
-        $device->borrower_name = $request->borrower_name;
-        $device->loan_start_date = $request->loan_start_date;
-        $device->loan_end_date = $request->loan_end_date;
-        $device->loan_purpose    = $request->loan_purpose;
-        $device->save();
+                if ($loan->returned_at) {
+                    $entries[] = (object) [
+                        'created_at' => $loan->returned_at,
+                        'action'     => 'returned',
+                        'user_name'  => $loan->borrower_name,
+                        'action_by'  => $loan->returnedTo?->name ?? $loan->borrower_name,
+                    ];
+                }
 
-        DeviceHistory::create([
-            'device_id' => $device->id,
-            'action'    => 'loaned',
-            'user_name' => $request->borrower_name,
-            'action_by' => Auth::user()->name,
-        ]);
-
-        return redirect()->route('devices.index')->with('status', 'Das Gerät wurde erfolgreich verliehen.');
-    }
-
-    public function return(Request $request)
-    {
-        $device = Device::findOrFail($request->device_id);
-        $device->status = 'available';
-        $device->borrower_name = null;
-        $device->loan_start_date = null;
-        $device->loan_end_date = null;
-        $device->loan_purpose = null;
-        $device->save();
-
-        DeviceHistory::create([
-            'device_id' => $device->id,
-            'action'    => 'returned',
-            'user_name' => Auth::user()->name,
-            'action_by' => Auth::user()->name,
-        ]);
-
-        return redirect()->route('devices.index')->with('status', 'Das Gerät wurde erfolgreich zurückgegeben.');
+                return $entries;
+            })
+            ->sortByDesc('created_at')
+            ->values();
     }
 
     public function overview()
     {
-        // Geräte, die ausgeliehen sind (Reihenfolge bleibt kompatibel)
-        $devices = Device::query()
-            ->where('status', 'loaned')
-            ->orderBy('group')
-            ->orderBy('title')
-            ->get();
+        $this->authorize('viewAny', Device::class);
 
-        // Vormerkungen inkl. Device/Kategorie
-        $reservations = DeviceReservation::query()
-            ->with(['device:id,title,group,image,description', 'user:id,name'])
-            ->where('status', '!=', 'cancelled')
-            ->orderBy('start_at')
+        $user = Auth::user();
+
+        $devices = $this->deviceQuery()->loaned()->get()
+            ->sortBy(fn (Device $d) => [$d->group ?? '', $d->title])
+            ->values();
+
+        // Vormerkungen: Moderation sieht alle, Nutzende nur die eigenen - sonst
+        // waeren Zweck und Name fremder Vormerkungen fuer alle lesbar.
+        $reservations = Reservation::query()
+            ->forDevices()
+            ->with(['reservable.deviceModel', 'user:id,name'])
+            ->blocking()
+            ->unless($user->isModerator(), fn ($q) => $q->where('user_id', $user->id))
+            ->orderBy('starts_at')
             ->get();
 
         return view('devices.overview', compact('devices', 'reservations'));
     }
 
+    /**
+     * Ausleihe buchen. Die Moderation darf auf einen beliebigen Namen ausleihen,
+     * alle anderen ausschliesslich auf den eigenen.
+     */
+    public function loan(Request $request)
+    {
+        $validated = $request->validate([
+            'device_id'       => ['required', 'integer', 'exists:devices,id'],
+            'borrower_name'   => ['required', 'string', 'max:255'],
+            'loan_start_date' => ['required', 'date'],
+            'loan_end_date'   => ['required', 'date', 'after_or_equal:loan_start_date'],
+            'loan_purpose'    => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $user = Auth::user();
+
+        DB::transaction(function () use ($validated, $user) {
+            // Sperre verhindert, dass zwei gleichzeitige Anfragen dasselbe
+            // Exemplar doppelt verleihen.
+            $device = Device::whereKey($validated['device_id'])->lockForUpdate()->firstOrFail();
+
+            $this->authorize('loan', $device);
+
+            $borrowerName = $validated['borrower_name'];
+            $borrowerId   = null;
+
+            if (! $user->can('loanToAnyone', Device::class)) {
+                // Selbstausleihe: Name serverseitig setzen, damit niemand auf
+                // einen fremden Namen bucht.
+                $borrowerName = $user->name;
+                $borrowerId   = $user->id;
+            }
+
+            $checkedOut = Carbon::parse($validated['loan_start_date'])->startOfDay();
+            $due        = Carbon::parse($validated['loan_end_date'])->endOfDay();
+
+            $loan = Loan::create([
+                'device_id'      => $device->id,
+                'user_id'        => $borrowerId,
+                'borrower_name'  => $borrowerName,
+                'issued_by_id'   => $user->id,
+                'checked_out_at' => $checkedOut,
+                'due_at'         => $due,
+                'purpose'        => $validated['loan_purpose'] ?? null,
+            ]);
+
+            // Eine passende eigene Vormerkung gilt mit der Abholung als eingelöst.
+            Reservation::query()
+                ->forDevices()
+                ->where('reservable_id', $device->id)
+                ->blocking()
+                ->when($borrowerId, fn ($q) => $q->where('user_id', $borrowerId))
+                ->where('starts_at', '<', $due)
+                ->where('ends_at', '>', $checkedOut)
+                ->update([
+                    'status'  => Reservation::STATUS_FULFILLED,
+                    'loan_id' => $loan->id,
+                ]);
+        });
+
+        return redirect()->route('devices.index')
+            ->with('status', __('Das Gerät wurde erfolgreich verliehen.'));
+    }
+
+    /**
+     * Rueckgabe buchen. Nutzende koennen nur die eigene Ausleihe zurueckgeben,
+     * die Moderation jede.
+     */
+    public function return(Request $request)
+    {
+        $validated = $request->validate([
+            'device_id'      => ['required', 'integer', 'exists:devices,id'],
+            'condition_note' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        $user = Auth::user();
+
+        DB::transaction(function () use ($validated, $user) {
+            $device = Device::whereKey($validated['device_id'])->lockForUpdate()->firstOrFail();
+
+            $this->authorize('return', $device);
+
+            $loan = $device->loans()->open()->lockForUpdate()->firstOrFail();
+
+            $loan->update([
+                'returned_at'    => now(),
+                'returned_to_id' => $user->id,
+                'condition_note' => $validated['condition_note'] ?? $loan->condition_note,
+            ]);
+        });
+
+        return redirect()->route('devices.index')
+            ->with('status', __('Das Gerät wurde erfolgreich zurückgegeben.'));
+    }
+
+    /** Gesamtprotokoll aller Ausleihvorgaenge (Moderation und hoeher). */
+    public function log()
+    {
+        $this->authorize('viewAll', Loan::class);
+
+        $loans = Loan::with(['device.deviceModel', 'user:id,name', 'issuedBy:id,name', 'returnedTo:id,name'])
+            ->latest('checked_out_at')
+            ->paginate(50);
+
+        return view('devices.log', compact('loans'));
+    }
+
     public function create()
     {
+        $this->authorize('create', Device::class);
+
         $categories = Category::orderBy('name')->get();
+
         return view('devices.create', compact('categories'));
     }
 
+    /**
+     * Legt einen Geraetetyp samt Exemplaren an. Bei quantity > 1 bekommen die
+     * Exemplare durchnummerierte Inventarnummern.
+     */
     public function store(Request $request)
     {
+        $this->authorize('create', Device::class);
+
         $validated = $request->validate([
-            'title'       => ['required','string','max:255'],
-            'description' => ['nullable','string'],
-            'image'       => ['nullable','image'],
-            'category_id' => ['required','exists:categories,id'],
+            'title'        => ['required', 'string', 'max:255'],
+            'description'  => ['nullable', 'string'],
+            'manufacturer' => ['nullable', 'string', 'max:255'],
+            'image'        => ['nullable', 'image', 'max:5120'],
+            'category_id'  => ['nullable', 'exists:categories,id'],
+            'quantity'     => ['nullable', 'integer', 'min:1', 'max:50'],
         ]);
 
-        // group SPIEGELN (Übergangsphase, bis Spalte entfernt wird)
-        $category = Category::find($validated['category_id']);
-        $payload = [
-            'title'       => $validated['title'],
-            'description' => $validated['description'] ?? null,
-            'category_id' => $validated['category_id'],
-            'group'       => $category?->name, // hält Altlogik kompatibel
-        ];
+        $quantity = (int) ($validated['quantity'] ?? 1);
 
-        if ($request->hasFile('image')) {
-            $payload['image'] = $request->file('image')->store('images', 'public');
-        }
+        DB::transaction(function () use ($request, $validated, $quantity) {
+            $model = DeviceModel::create([
+                'category_id'  => $validated['category_id'] ?? null,
+                'name'         => $validated['title'],
+                'description'  => $validated['description'] ?? null,
+                'manufacturer' => $validated['manufacturer'] ?? null,
+                'image'        => $request->hasFile('image')
+                    ? $request->file('image')->store('images', 'public')
+                    : null,
+            ]);
 
-        Device::create($payload);
+            for ($i = 0; $i < $quantity; $i++) {
+                $this->createDevice($model);
+            }
+        });
 
-        return redirect()->route('devices.index')->with('success', 'Gerät erfolgreich hinzugefügt.');
+        $message = $quantity === 1
+            ? __('Gerät erfolgreich hinzugefügt.')
+            : __(':count Exemplare erfolgreich hinzugefügt.', ['count' => $quantity]);
+
+        return redirect()->route('devices.index')->with('success', $message);
+    }
+
+    /**
+     * Legt ein Exemplar an und vergibt die Inventarnummer automatisch.
+     *
+     * Sie taucht in der Oberflaeche nicht auf, muss aber eindeutig sein. Die
+     * laufende ID liefert genau das - sie steht erst nach dem Einfuegen fest,
+     * deshalb wird sie in zwei Schritten gesetzt.
+     */
+    private function createDevice(DeviceModel $model): Device
+    {
+        $device = $model->devices()->create([
+            'inventory_no' => 'tmp-'.Str::uuid(),
+        ]);
+
+        $device->update([
+            'inventory_no' => 'INV-'.str_pad((string) $device->id, 5, '0', STR_PAD_LEFT),
+        ]);
+
+        return $device;
     }
 
     public function edit(Device $device)
     {
+        $this->authorize('update', $device);
+
         $categories = Category::orderBy('name')->get();
+
         return view('devices.edit', compact('device', 'categories'));
     }
 
+    /**
+     * Aendert den Geraetetyp (gilt fuer alle Exemplare) und die Stammdaten
+     * dieses einen Exemplars.
+     */
     public function update(Request $request, Device $device)
     {
+        $this->authorize('update', $device);
+
         $validated = $request->validate([
-            'title'       => ['required','string','max:255'],
-            'description' => ['nullable','string'],
-            'image'       => ['nullable','image'],
-            'category_id' => ['required','exists:categories,id'],
+            'title'        => ['required', 'string', 'max:255'],
+            'description'  => ['nullable', 'string'],
+            'manufacturer' => ['nullable', 'string', 'max:255'],
+            'image'        => ['nullable', 'image', 'max:5120'],
+            'category_id'  => ['nullable', 'exists:categories,id'],
+            'serial_no'    => ['nullable', 'string', 'max:128'],
+            'active'       => ['nullable', 'boolean'],
         ]);
 
-        $category = Category::find($validated['category_id']);
-        $payload = [
-            'title'       => $validated['title'],
-            'description' => $validated['description'] ?? null,
-            'category_id' => $validated['category_id'],
-            'group'       => $category?->name, // Übergangskompatibilität
-        ];
+        DB::transaction(function () use ($request, $validated, $device) {
+            $model = $device->deviceModel;
 
-        if ($request->hasFile('image')) {
-            // altes Bild löschen (falls vorhanden)
-            if ($device->image) {
-                Storage::disk('public')->delete($device->image);
+            $payload = [
+                'category_id'  => $validated['category_id'] ?? null,
+                'name'         => $validated['title'],
+                'description'  => $validated['description'] ?? null,
+                'manufacturer' => $validated['manufacturer'] ?? null,
+            ];
+
+            if ($request->hasFile('image')) {
+                if ($model->image) {
+                    Storage::disk('public')->delete($model->image);
+                }
+                $payload['image'] = $request->file('image')->store('images', 'public');
             }
-            $payload['image'] = $request->file('image')->store('images', 'public');
-        }
 
-        $device->update($payload);
+            $model->update($payload);
 
-        return redirect()->route('devices.index')->with('success', 'Gerät erfolgreich aktualisiert.');
+            $device->update([
+                'serial_no'    => $validated['serial_no'] ?? $device->serial_no,
+                'active'       => $request->boolean('active', $device->active),
+            ]);
+        });
+
+        return redirect()->route('devices.index')
+            ->with('success', __('Gerät erfolgreich aktualisiert.'));
     }
 
     public function destroy(Device $device)
     {
-        if ($device->image) {
-            Storage::disk('public')->delete($device->image);
+        $this->authorize('delete', $device);
+
+        if ($device->isLoaned()) {
+            return back()->with('error', __('Ein ausgeliehenes Gerät kann nicht gelöscht werden.'));
         }
 
-        $device->delete();
+        DB::transaction(function () use ($device) {
+            $model = $device->deviceModel;
+            $device->delete();
 
-        return redirect()->route('devices.index')->with('success', 'Gerät erfolgreich gelöscht.');
+            // War das das letzte Exemplar, verschwindet auch der Gerätetyp -
+            // sonst bleiben leere Typen in der Liste stehen.
+            if ($model && $model->devices()->count() === 0) {
+                if ($model->image) {
+                    Storage::disk('public')->delete($model->image);
+                }
+                $model->delete();
+            }
+        });
+
+        return redirect()->route('devices.index')
+            ->with('success', __('Gerät erfolgreich gelöscht.'));
     }
 }

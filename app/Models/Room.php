@@ -4,16 +4,21 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\MorphMany;
 
 class Room extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['name', 'description', 'location', 'new_column']; // 'new column' durch 'new_column' ersetzt
+    protected $fillable = ['name', 'description', 'location', 'capacity', 'bookable'];
 
-    // Beziehung zur Reservation-Tabelle
-    public function reservations()
+    protected $casts = [
+        'bookable'  => 'boolean',
+        'capacity'  => 'integer',
+    ];
+
+    public function reservations(): MorphMany
     {
-        return $this->hasMany(Reservation::class);
+        return $this->morphMany(Reservation::class, 'reservable');
     }
 }

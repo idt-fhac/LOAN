@@ -37,7 +37,7 @@
         @method('PUT')
 
         <div class="mb-4">
-            <label for="title" class="block text-gray-700 text-sm font-bold mb-2">Name & Label inkl. Seriennummer (SN) (z.B. <em>HTC VIVE Pro 2 #1 (SN: 82682630)</em>):</label>
+            <label for="title" class="block text-gray-700 text-sm font-bold mb-2">Gerätetyp (gilt für alle Exemplare) (z.B. <em>HTC VIVE Pro 2 #1 (SN: 82682630)</em>):</label>
             <input type="text" name="title" id="title" class="bg-gray-50 focus:ring-gray-500 focus:border-gray-500 border-gray-300 appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight" value="{{ old('title', $device->title) }}" required>
         </div>
 
@@ -58,8 +58,8 @@
 
         <div class="mb-4">
             <label class="block text-sm font-medium mb-1">Kategorie</label>
-            <select name="category_id" class="w-full border rounded p-2" required>
-                <option value="">– bitte wählen –</option>
+            <select name="category_id" class="w-full border rounded p-2">
+                <option value="" @selected(! old('category_id', $device->category_id))>Keine Kategorie</option>
                 @foreach($categories as $cat)
                     <option value="{{ $cat->id }}" @selected(old('category_id', $device->category_id ?? null) == $cat->id)>
                         {{ $cat->name }}
@@ -67,6 +67,29 @@
                 @endforeach
             </select>
         </div>
+
+        <div class="mb-4">
+            <label for="manufacturer" class="block text-sm font-medium mb-1">Hersteller (optional)</label>
+            <input type="text" name="manufacturer" id="manufacturer" class="w-full border rounded p-2"
+                   value="{{ old('manufacturer', $device->deviceModel->manufacturer) }}">
+        </div>
+
+        <fieldset class="mb-4 rounded border border-gray-300 p-4">
+            <legend class="px-2 text-sm font-bold text-gray-700">Nur dieses Exemplar</legend>
+
+            <div class="mb-4">
+                <label for="serial_no" class="block text-sm font-medium mb-1">Seriennummer (optional)</label>
+                <input type="text" name="serial_no" id="serial_no" class="w-full border rounded p-2"
+                       value="{{ old('serial_no', $device->serial_no) }}">
+            </div>
+
+            <label class="flex items-center gap-2 text-sm">
+                <input type="hidden" name="active" value="0">
+                <input type="checkbox" name="active" id="active" value="1" class="rounded border-gray-300"
+                       @checked(old('active', $device->active))>
+                Ausleihbar (abwählen, wenn das Exemplar in Reparatur oder ausgemustert ist)
+            </label>
+        </fieldset>
 
         <div class="mb-4">
             <button type="submit" class="bg-gray-600 hover:bg-gray-800 border-gray-300 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline">Gerät aktualisieren</button>
