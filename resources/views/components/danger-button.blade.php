@@ -1,3 +1,4 @@
-<button {{ $attributes->merge(['type' => 'submit', 'class' => 'inline-flex items-center px-4 py-2 bg-red-600 border border-transparent rounded-md font-semibold text-xs text-white uppercase tracking-widest hover:bg-red-500 active:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition ease-in-out duration-150']) }}>
+{{-- Statusfarbe "error" aus dem FH-Design-System. Nur Löschen und Überfälligkeit. --}}
+<button {{ $attributes->merge(['type' => 'submit', 'class' => 'inline-flex items-center justify-center gap-2 h-11 px-5 rounded-sm bg-white border border-red-600 font-bold text-sm text-red-600 hover:bg-red-600 hover:text-white transition-colors duration-fast ease-standard']) }}>
     {{ $slot }}
 </button>
