@@ -7,6 +7,7 @@ use App\Models\Device;
 use App\Models\Reservation;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Geraetevormerkungen. Liegen seit dem Zielmodell auf derselben Tabelle wie
@@ -36,16 +37,21 @@ class DeviceReservationController extends Controller
 
         [$start, $end] = $this->reservationWindow($validated);
         $purpose       = $this->assertWordLimit($validated['purpose'] ?? null);
-        $this->assertNoOverlap($device, $start, $end);
+        $reservedBy    = $this->reservedByName($request->input('reserved_by_name'));
 
-        $device->reservations()->create([
-            'user_id'          => Auth::id(),
-            'reserved_by_name' => $this->reservedByName($request->input('reserved_by_name')),
-            'starts_at'        => $start,
-            'ends_at'          => $end,
-            'purpose'          => $purpose,
-            'status'           => Reservation::STATUS_PENDING,
-        ]);
+        DB::transaction(function () use ($device, $start, $end, $purpose, $reservedBy) {
+            $this->lockReservable($device);
+            $this->assertNoOverlap($device, $start, $end);
+
+            $device->reservations()->create([
+                'user_id'          => Auth::id(),
+                'reserved_by_name' => $reservedBy,
+                'starts_at'        => $start,
+                'ends_at'          => $end,
+                'purpose'          => $purpose,
+                'status'           => Reservation::STATUS_PENDING,
+            ]);
+        });
 
         return redirect()->route('devices.show', $device)
             ->with('success', __('Gerät wurde erfolgreich vorgemerkt.'));

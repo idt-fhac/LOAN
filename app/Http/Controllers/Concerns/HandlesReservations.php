@@ -83,6 +83,23 @@ trait HandlesReservations
         }
     }
 
+    /**
+     * Sperrt das reservierte Objekt bis zum Ende der laufenden Transaktion.
+     *
+     * Pruefen und Speichern sind zwei Schritte. Ohne Sperre kommen zwei
+     * gleichzeitige Anfragen fuer denselben Zeitraum beide durch die
+     * Ueberschneidungspruefung und werden beide gespeichert. Mit Sperre
+     * wartet die zweite, bis die erste fertig ist, und sieht dann deren
+     * Buchung.
+     *
+     * Wirkt auf MySQL, MariaDB und PostgreSQL. SQLite kennt kein
+     * SELECT ... FOR UPDATE, dort ist der Aufruf wirkungslos.
+     */
+    protected function lockReservable(Model $reservable): void
+    {
+        $reservable->newQuery()->whereKey($reservable->getKey())->lockForUpdate()->first();
+    }
+
     /** Auf einen fremden Namen vormerken darf nur die Moderation. */
     protected function reservedByName(?string $requested): string
     {

@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class DeviceController extends Controller
 {
@@ -108,6 +109,11 @@ class DeviceController extends Controller
     /**
      * Ausleihe buchen. Die Moderation darf auf einen beliebigen Namen ausleihen,
      * alle anderen ausschliesslich auf den eigenen.
+     *
+     * Offene oder genehmigte Vormerkungen anderer Personen im gewuenschten
+     * Zeitraum verhindern eine Selbstausleihe. Die Moderation darf sie
+     * uebergehen - die Vormerkung bleibt dabei bestehen, und die Moderation
+     * bekommt einen Hinweis.
      */
     public function loan(Request $request)
     {
@@ -121,17 +127,18 @@ class DeviceController extends Controller
 
         $user = Auth::user();
 
-        DB::transaction(function () use ($validated, $user) {
+        $uebergangen = DB::transaction(function () use ($validated, $user) {
             // Sperre verhindert, dass zwei gleichzeitige Anfragen dasselbe
             // Exemplar doppelt verleihen.
             $device = Device::whereKey($validated['device_id'])->lockForUpdate()->firstOrFail();
 
             $this->authorize('loan', $device);
 
+            $mayOverride  = $user->can('loanToAnyone', Device::class);
             $borrowerName = $validated['borrower_name'];
             $borrowerId   = null;
 
-            if (! $user->can('loanToAnyone', Device::class)) {
+            if (! $mayOverride) {
                 // Selbstausleihe: Name serverseitig setzen, damit niemand auf
                 // einen fremden Namen bucht.
                 $borrowerName = $user->name;
@@ -140,6 +147,35 @@ class DeviceController extends Controller
 
             $checkedOut = Carbon::parse($validated['loan_start_date'])->startOfDay();
             $due        = Carbon::parse($validated['loan_end_date'])->endOfDay();
+
+            // Vormerkungen fuer dieses Exemplar, die den Zeitraum beruehren und
+            // noch nicht eingeloest sind.
+            $imZeitraum = Reservation::query()
+                ->forDevices()
+                ->where('reservable_id', $device->id)
+                ->whereIn('status', [Reservation::STATUS_PENDING, Reservation::STATUS_APPROVED])
+                ->where('starts_at', '<', $due)
+                ->where('ends_at', '>', $checkedOut);
+
+            // Welche davon gehoert der entleihenden Person? Bei Selbstausleihe
+            // ueber das Konto, an der Theke ueber den eingetragenen Namen.
+            $eigene = fn ($q) => $borrowerId
+                ? $q->where('user_id', $borrowerId)
+                : $q->where('reserved_by_name', $borrowerName);
+
+            $fremde = (clone $imZeitraum)
+                ->where(fn ($q) => $borrowerId
+                    ? $q->where('user_id', '!=', $borrowerId)
+                    : $q->whereNull('reserved_by_name')->orWhere('reserved_by_name', '!=', $borrowerName))
+                ->with('user:id,name')
+                ->orderBy('starts_at')
+                ->get();
+
+            if ($fremde->isNotEmpty() && ! $mayOverride) {
+                throw ValidationException::withMessages([
+                    'loan_end_date' => $this->konfliktMeldung($fremde->first(), $checkedOut),
+                ]);
+            }
 
             $loan = Loan::create([
                 'device_id'      => $device->id,
@@ -151,22 +187,59 @@ class DeviceController extends Controller
                 'purpose'        => $validated['loan_purpose'] ?? null,
             ]);
 
-            // Eine passende eigene Vormerkung gilt mit der Abholung als eingelöst.
-            Reservation::query()
-                ->forDevices()
-                ->where('reservable_id', $device->id)
-                ->blocking()
-                ->when($borrowerId, fn ($q) => $q->where('user_id', $borrowerId))
-                ->where('starts_at', '<', $due)
-                ->where('ends_at', '>', $checkedOut)
-                ->update([
-                    'status'  => Reservation::STATUS_FULFILLED,
-                    'loan_id' => $loan->id,
-                ]);
+            // Die eigene Vormerkung gilt mit der Abholung als eingeloest.
+            // Fremde bleiben unangetastet - auch wenn die Moderation sie
+            // uebergeht, wollen die Vormerkenden das Geraet weiterhin.
+            (clone $imZeitraum)->where($eigene)->update([
+                'status'  => Reservation::STATUS_FULFILLED,
+                'loan_id' => $loan->id,
+            ]);
+
+            return $fremde;
         });
 
-        return redirect()->route('devices.index')
-            ->with('status', __('Das Gerät wurde erfolgreich verliehen.'));
+        $message = __('Das Gerät wurde erfolgreich verliehen.');
+
+        if ($uebergangen->isNotEmpty()) {
+            $message .= ' '.__('Achtung: Der Zeitraum überschneidet sich mit der Vormerkung von :namen. Die Vormerkung bleibt bestehen.', [
+                'namen' => $uebergangen
+                    ->map(fn (Reservation $r) => sprintf(
+                        '%s (%s – %s)',
+                        $r->reserved_by_name ?? $r->user?->name ?? '—',
+                        $r->starts_at->format('d.m.Y H:i'),
+                        $r->ends_at->format('d.m.Y H:i'),
+                    ))
+                    ->join(', ', ' und '),
+            ]);
+        }
+
+        return redirect()->route('devices.index')->with('status', $message);
+    }
+
+    /**
+     * Fehlermeldung fuer eine Selbstausleihe, die in eine fremde Vormerkung
+     * faellt. Nennt keine Namen - fremde Vormerkungen sind fuer Nutzende
+     * nicht einsehbar - schlaegt aber das spaeteste moegliche Rueckgabedatum
+     * vor, falls es eines gibt.
+     */
+    private function konfliktMeldung(Reservation $konflikt, Carbon $checkedOut): string
+    {
+        $meldung = __('Das Gerät ist vom :start bis :end für eine andere Person vorgemerkt.', [
+            'start' => $konflikt->starts_at->format('d.m.Y H:i'),
+            'end'   => $konflikt->ends_at->format('d.m.Y H:i'),
+        ]);
+
+        // Rueckgabe gilt bis Tagesende. Der letzte freie Tag ist also der Tag
+        // vor Beginn der Vormerkung - sofern der nicht vor dem Ausleihbeginn liegt.
+        $letzterTag = $konflikt->starts_at->copy()->subDay()->startOfDay();
+
+        if ($letzterTag->greaterThanOrEqualTo($checkedOut)) {
+            $meldung .= ' '.__('Eine Ausleihe bis einschließlich :datum ist möglich.', [
+                'datum' => $letzterTag->format('d.m.Y'),
+            ]);
+        }
+
+        return $meldung;
     }
 
     /**

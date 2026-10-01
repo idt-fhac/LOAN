@@ -10,6 +10,8 @@ use App\Models\Room;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\MessageBag;
+use Illuminate\Support\ViewErrorBag;
 use Tests\TestCase;
 
 /**
@@ -324,5 +326,145 @@ class LoanDomainTest extends TestCase
 
         $this->assertSame(1, Device::overdue()->count());
         $this->assertSame(2, Device::loaned()->count());
+    }
+
+    /* -------------------------------------- Ausleihe und fremde Vormerkungen */
+
+    /** Genehmigte Vormerkung von Alice, Mittwoch 10:00 bis Freitag 12:00. */
+    private function vormerkungVonAlice(Device $device, string $status = Reservation::STATUS_APPROVED): Reservation
+    {
+        $alice = $this->user(name: 'Alice');
+
+        return $device->reservations()->create([
+            'user_id'          => $alice->id,
+            'reserved_by_name' => 'Alice',
+            'starts_at'        => now()->addDays(2)->setTime(10, 0),
+            'ends_at'          => now()->addDays(4)->setTime(12, 0),
+            'status'           => $status,
+        ]);
+    }
+
+    private function ausleihen(User $als, Device $device, int $bisInTagen, string $name = 'egal')
+    {
+        return $this->actingAs($als)->post(route('devices.loan'), [
+            'device_id'       => $device->id,
+            'borrower_name'   => $name,
+            'loan_start_date' => now()->format('Y-m-d'),
+            'loan_end_date'   => now()->addDays($bisInTagen)->format('Y-m-d'),
+        ]);
+    }
+
+    public function test_selbstausleihe_scheitert_an_fremder_vormerkung(): void
+    {
+        $device = $this->device();
+        $this->vormerkungVonAlice($device);
+
+        $this->ausleihen($this->user(name: 'Bob'), $device, bisInTagen: 3)
+             ->assertSessionHasErrors('loan_end_date');
+
+        $this->assertDatabaseCount('loans', 0);
+    }
+
+    public function test_offene_vormerkung_blockiert_ebenfalls(): void
+    {
+        // Wer zuerst vormerkt, ist zuerst dran - auch vor der Genehmigung.
+        $device = $this->device();
+        $this->vormerkungVonAlice($device, Reservation::STATUS_PENDING);
+
+        $this->ausleihen($this->user(name: 'Bob'), $device, bisInTagen: 3)
+             ->assertSessionHasErrors('loan_end_date');
+    }
+
+    public function test_meldung_nennt_das_letzte_moegliche_rueckgabedatum(): void
+    {
+        $device = $this->device();
+        $this->vormerkungVonAlice($device);
+
+        $this->ausleihen($this->user(name: 'Bob'), $device, bisInTagen: 3);
+
+        $meldung = session('errors')->first('loan_end_date');
+        $this->assertStringContainsString(now()->addDay()->format('d.m.Y'), $meldung);
+        $this->assertStringNotContainsString('Alice', $meldung); // fremde Namen bleiben verborgen
+    }
+
+    public function test_selbstausleihe_bis_vor_die_fremde_vormerkung_geht(): void
+    {
+        $device = $this->device();
+        $this->vormerkungVonAlice($device);
+
+        $this->ausleihen($this->user(name: 'Bob'), $device, bisInTagen: 1)
+             ->assertSessionHasNoErrors();
+
+        $this->assertDatabaseCount('loans', 1);
+    }
+
+    public function test_stornierte_fremde_vormerkung_blockiert_nicht(): void
+    {
+        $device = $this->device();
+        $this->vormerkungVonAlice($device, Reservation::STATUS_CANCELLED);
+
+        $this->ausleihen($this->user(name: 'Bob'), $device, bisInTagen: 3)
+             ->assertSessionHasNoErrors();
+    }
+
+    public function test_moderation_darf_fremde_vormerkung_uebergehen(): void
+    {
+        $device      = $this->device();
+        $reservation = $this->vormerkungVonAlice($device);
+
+        $this->ausleihen($this->user(User::ROLE_MODERATION, 'Theke'), $device, bisInTagen: 3, name: 'Bob')
+             ->assertSessionHasNoErrors()
+             ->assertSessionHas('status', fn ($s) => str_contains($s, 'Alice'));
+
+        $this->assertDatabaseCount('loans', 1);
+
+        // Alice will das Geraet weiterhin - ihre Vormerkung bleibt offen.
+        $reservation->refresh();
+        $this->assertSame(Reservation::STATUS_APPROVED, $reservation->status);
+        $this->assertNull($reservation->loan_id);
+    }
+
+    public function test_theke_loest_nur_die_vormerkung_der_entleihenden_person_ein(): void
+    {
+        $device      = $this->device();
+        $reservation = $this->vormerkungVonAlice($device);
+
+        $this->ausleihen($this->user(User::ROLE_MODERATION, 'Theke'), $device, bisInTagen: 3, name: 'Alice')
+             ->assertSessionHasNoErrors()
+             ->assertSessionHas('status', fn ($s) => ! str_contains($s, 'Achtung'));
+
+        $this->assertSame(Reservation::STATUS_FULFILLED, $reservation->refresh()->status);
+    }
+
+    public function test_verliehenes_geraet_kann_vorgemerkt_werden(): void
+    {
+        // "Ich moechte es haben, wenn die Person damit fertig ist."
+        $device = $this->device();
+        $this->ausleihen($this->user(name: 'Bob'), $device, bisInTagen: 3)->assertSessionHasNoErrors();
+        $this->assertTrue($device->fresh()->isLoaned());
+
+        $this->actingAs($this->user(name: 'Alice'))
+             ->post(route('devices.reservations.store', $device), [
+                 'start_date' => now()->addDays(4)->format('Y-m-d'),
+                 'start_time' => '09:00',
+                 'end_date'   => now()->addDays(6)->format('Y-m-d'),
+                 'end_time'   => '17:00',
+                 'purpose'    => 'Danach',
+             ])
+             ->assertSessionHasNoErrors();
+
+        $this->assertDatabaseHas('reservations', ['reserved_by_name' => 'Alice']);
+    }
+
+    public function test_geraeteliste_zeigt_fehler_aus_ihren_formularen(): void
+    {
+        // Ausleihe und Vormerkung leiten bei Fehlern auf die Liste zurueck.
+        $this->actingAs($this->user(name: 'Bob'))
+             ->withSession(['errors' => (new ViewErrorBag)->put('default', new MessageBag([
+                 'loan_end_date' => 'Das Gerät ist vorgemerkt.',
+             ]))])
+             ->get(route('devices.index'))
+             ->assertOk()
+             ->assertSee('Das Gerät ist vorgemerkt.');
     }
 }
