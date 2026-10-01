@@ -42,4 +42,24 @@ class AuthenticationTest extends TestCase
 
         $this->assertGuest();
     }
+
+    /**
+     * Die Route-Drosselung greift ueber verschiedene E-Mail-Adressen hinweg.
+     * LoginRequest begrenzt zusaetzlich je Adresse und IP - das schuetzt
+     * aber nicht gegen das Durchprobieren vieler Konten von einer IP aus.
+     */
+    public function test_login_wird_nach_zehn_versuchen_pro_minute_gedrosselt(): void
+    {
+        for ($i = 1; $i <= 10; $i++) {
+            $this->post('/login', [
+                'email'    => "unbekannt{$i}@example.com",
+                'password' => 'falsch',
+            ])->assertStatus(302);
+        }
+
+        $this->post('/login', [
+            'email'    => 'unbekannt11@example.com',
+            'password' => 'falsch',
+        ])->assertStatus(429);
+    }
 }

@@ -27,6 +27,7 @@
 <div class="lg:container mx-auto mb-8 p-4 bg-gray-600 rounded text-white">
     <div class="flex items-center justify-between mb-4">
         <h1 class="text-2xl font-bold"> </h1>
+        @can('manage-inventory')
         <a href="{{ route('categories.create') }}"
            class="inline-flex items-center px-4 py-2 rounded-md bg-gray-600 text-white text-sm font-medium hover:bg-yellow-600">
             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 24 24" fill="currentColor">
@@ -34,6 +35,7 @@
             </svg>
             Kategorie hinzufügen
         </a>
+        @endcan
     </div>
 
     @if(session('success'))
@@ -62,6 +64,7 @@
                         <td class="p-3">{{ $cat->name }}</td>
                         <td class="p-3 text-gray-300">{{ $cat->description ?: 'Keine Beschreibung verfügbar' }}</td>
                         <td class="p-3 text-right">
+                            @can('manage-inventory')
                             <a href="{{ route('categories.edit', $cat) }}"
                                class="inline-block mr-2 text-gray-300 hover:text-white">
                                 <!-- Stift -->
@@ -113,6 +116,7 @@
                                     </svg>
                                 </button>
                             </form>
+                            @endcan
                         </td>
                     </tr>
                 @empty

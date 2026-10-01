@@ -57,7 +57,8 @@
             <label for="role" class="block text-gray-700 text-sm font-bold mb-2">Rolle:</label>
             <select name="role" id="role" class="bg-gray-50 focus:ring-gray-500 focus:border-gray-500 border-gray-300 appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight" required>
                 <option value="administration" {{ $user->role == 'administration' ? 'selected' : '' }}>Administration</option>
-                <option value="moderation" {{ $user->role == 'moderation' ? 'selected' : '' }}>Moderation</option>
+                <option value="user" {{ $user->role == 'user' ? 'selected' : '' }}>Nutzer:in (nur eigene Vorgänge)</option>
+                <option value="moderation" {{ $user->role == 'moderation' ? 'selected' : '' }}>Moderation (Geräte, Räume, Kategorien)</option>
             </select>
         </div>
 
