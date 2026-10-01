@@ -206,6 +206,7 @@
                                     @endif
                                 </td>
                                 <td class="border-b px-4 py-2 border-gray-600 text-sm text-right">
+                                    @if (auth()->user()->can('return', $device))
                                     <form action="{{ route('devices.return') }}" method="POST" class="inline-block"
                                           onsubmit="return confirm('Wurde {{ $device->title }} vollständig und korrekt angenommen?');">
                                         @csrf
@@ -216,6 +217,7 @@
                                             Annehmen
                                         </button>
                                     </form>
+                                    @endif
                                 </td>
                             </tr>
                         @endif
@@ -282,7 +284,7 @@
                                             <span class="xl:hidden">V</span>
                                         </button>
 
-                                        @if ($res->status === 'pending' && $res->user_id === auth()->id())
+                                        @if ($res->status === 'pending' && auth()->user()->can('delete', $res))
                                             <form action="{{ route('devices.reservations.destroy', $res) }}"
                                                   method="POST"
                                                   onsubmit="return confirm('Willst du die Vormerkung wirklich widerrufen?');">
@@ -328,7 +330,8 @@
                                         <label for="borrower_name" class="block text-gray-700 text-sm font-bold mb-2">Name der Person:</label>
                                         <input type="text" name="borrower_name" id="borrower_name" required
                                                class="bg-gray-50 focus:ring-gray-500 focus:border-gray-500 border-gray-300 appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight"
-                                               placeholder="An wen wird das Gerät verliehen?">
+                                               placeholder="An wen wird das Gerät verliehen?"
+                                               @cannot('manage-inventory') value="{{ auth()->user()->name }}" readonly @endcannot>
                                     </div>
 
                                     <div class="mb-4">
