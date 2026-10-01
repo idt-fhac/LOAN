@@ -2,12 +2,12 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Requests\ProfileUpdateRequest;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Redirect;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\Rules\Password;
 use Illuminate\View\View;
 
 class ProfileController extends Controller
@@ -29,47 +29,41 @@ class ProfileController extends Controller
      }
 
     /**
-     * Update the user's profile information.
+     * Name, E-Mail und optional Passwort aendern.
+     *
+     * Ein neues Passwort setzt das aktuelle voraus - sonst koennte jede Person
+     * mit Zugriff auf eine offene Sitzung das Konto uebernehmen.
      */
-    public function update(Request $request)
+    public function update(Request $request): RedirectResponse
     {
-        $user = Auth::user();
-
-        $request->validate([
-            'name' => 'required|string|max:255',
-            'email' => 'required|string|email|max:255|unique:users,email,' . $user->id,
-            'password' => 'nullable|string|min:8|confirmed',
-        ]);
-
-        $user->name = $request->input('name');
-        $user->email = $request->input('email');
-        if ($request->filled('password')) {
-            $user->password = Hash::make($request->input('password'));
-        }
-        $user->save();
-
-        return redirect()->route('profile.show')->with('status', 'Profil erfolgreich aktualisiert.');
-    }
-
-
-    /**
-     * Delete the user's account.
-     */
-    public function destroy(Request $request): RedirectResponse
-    {
-        $request->validateWithBag('userDeletion', [
-            'password' => ['required', 'current-password'],
-        ]);
-
         $user = $request->user();
 
-        Auth::logout();
+        $validated = $request->validate([
+            'name'             => ['required', 'string', 'max:255'],
+            'email'            => ['required', 'string', 'email', 'max:255', Rule::unique('users')->ignore($user->id)],
+            'current_password' => ['nullable', 'required_with:password', 'current_password'],
+            'password'         => ['nullable', 'confirmed', Password::defaults()],
+        ]);
 
-        $user->delete();
+        $user->fill([
+            'name'  => $validated['name'],
+            'email' => $validated['email'],
+        ]);
 
-        $request->session()->invalidate();
-        $request->session()->regenerateToken();
+        // Eine neue Adresse ist nicht bestaetigt.
+        if ($user->isDirty('email')) {
+            $user->email_verified_at = null;
+        }
 
-        return Redirect::to('/');
+        if (! empty($validated['password'])) {
+            $user->password = Hash::make($validated['password']);
+        }
+
+        $user->save();
+
+        return redirect()->route('profile.show')->with('status', __('Profil erfolgreich aktualisiert.'));
     }
+
+    // Kein destroy(): Konten loescht nur die Administration (UserController),
+    // wo UserPolicy das Entfernen der letzten Administration verhindert.
 }

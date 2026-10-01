@@ -38,8 +38,14 @@
             </div>
 
             <div class="mb-4">
-                <label for="password" class="block text-gray-700 text-sm font-bold mb-2">Passwort:</label>
-                <input type="password" name="password" id="password" class="bg-gray-50 focus:ring-gray-500 focus:border-gray-500 border-gray-300 appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+                <label for="current_password" class="block text-gray-700 text-sm font-bold mb-2">Aktuelles Passwort:</label>
+                <input type="password" name="current_password" id="current_password" autocomplete="current-password" class="bg-gray-50 focus:ring-gray-500 focus:border-gray-500 border-gray-300 appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
+                <p class="text-gray-600 text-xs italic mt-1">Nur nötig, wenn du das Passwort ändern möchtest.</p>
+            </div>
+
+            <div class="mb-4">
+                <label for="password" class="block text-gray-700 text-sm font-bold mb-2">Neues Passwort:</label>
+                <input type="password" name="password" id="password" autocomplete="new-password" class="bg-gray-50 focus:ring-gray-500 focus:border-gray-500 border-gray-300 appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight">
                 <p class="text-gray-600 text-xs italic mt-1">Lasse das Feld leer, wenn du das Passwort nicht ändern möchtest.</p>
             </div>
 
