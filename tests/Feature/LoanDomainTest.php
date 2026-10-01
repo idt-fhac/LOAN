@@ -10,6 +10,8 @@ use App\Models\Room;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\MessageBag;
+use Illuminate\Support\ViewErrorBag;
 use Tests\TestCase;
 
 /**
@@ -324,5 +326,17 @@ class LoanDomainTest extends TestCase
 
         $this->assertSame(1, Device::overdue()->count());
         $this->assertSame(2, Device::loaned()->count());
+    }
+
+    public function test_geraeteliste_zeigt_fehler_aus_ihren_formularen(): void
+    {
+        // Ausleihe und Vormerkung leiten bei Fehlern auf die Liste zurueck.
+        $this->actingAs($this->user(name: 'Bob'))
+             ->withSession(['errors' => (new ViewErrorBag)->put('default', new MessageBag([
+                 'loan_end_date' => 'Das Gerät ist vorgemerkt.',
+             ]))])
+             ->get(route('devices.index'))
+             ->assertOk()
+             ->assertSee('Das Gerät ist vorgemerkt.');
     }
 }

@@ -33,6 +33,18 @@
             </svg>
         </a>
     </p>
+    {{-- Validierungsfehler aus den Formularen dieser Seite (Ausleihe, Vormerkung).
+         Ohne diesen Block landete man nach einem Fehler kommentarlos wieder hier. --}}
+    @if ($errors->any())
+        <div role="alert" class="mb-8 rounded-md border border-fh-error bg-fh-error-wash p-4 shadow-sm">
+            <strong class="font-medium text-gray-900">{{ __('Nicht gespeichert') }}</strong>
+            <ul class="mt-1 list-disc pl-5 text-sm text-gray-800">
+                @foreach ($errors->all() as $error)
+                    <li>{{ $error }}</li>
+                @endforeach
+            </ul>
+        </div>
+    @endif
     @if (session('status'))
         <div id="alert" role="alert" class="mb-8 rounded-md border border-gray-300 bg-white p-4 shadow-sm">
             <div class="flex items-start gap-4">
