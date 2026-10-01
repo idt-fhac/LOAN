@@ -59,6 +59,7 @@
         <div class="mb-4">
             <label class="block text-sm font-medium mb-1">Kategorie</label>
             <select name="category_id" class="w-full border rounded p-2">
+                <option value="" @selected(! old('category_id', $device->category_id))>Keine Kategorie</option>
                 @foreach($categories as $cat)
                     <option value="{{ $cat->id }}" @selected(old('category_id', $device->category_id ?? null) == $cat->id)>
                         {{ $cat->name }}
