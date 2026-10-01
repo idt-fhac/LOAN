@@ -7,6 +7,7 @@ use App\Models\Reservation;
 use App\Models\Room;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 
 class RoomController extends Controller
 {
@@ -109,16 +110,21 @@ class RoomController extends Controller
 
         [$start, $end] = $this->reservationWindow($validated);
         $purpose       = $this->assertWordLimit($validated['purpose'] ?? null);
-        $this->assertNoOverlap($room, $start, $end);
+        $reservedBy    = $this->reservedByName($request->input('reserved_by_name'));
 
-        $room->reservations()->create([
-            'user_id'          => Auth::id(),
-            'reserved_by_name' => $this->reservedByName($request->input('reserved_by_name')),
-            'starts_at'        => $start,
-            'ends_at'          => $end,
-            'purpose'          => $purpose,
-            'status'           => Reservation::STATUS_APPROVED, // Raeume werden nicht genehmigt
-        ]);
+        DB::transaction(function () use ($room, $start, $end, $purpose, $reservedBy) {
+            $this->lockReservable($room);
+            $this->assertNoOverlap($room, $start, $end);
+
+            $room->reservations()->create([
+                'user_id'          => Auth::id(),
+                'reserved_by_name' => $reservedBy,
+                'starts_at'        => $start,
+                'ends_at'          => $end,
+                'purpose'          => $purpose,
+                'status'           => Reservation::STATUS_APPROVED, // Raeume werden nicht genehmigt
+            ]);
+        });
 
         return redirect()->route('rooms.index')->with('status', __('Raum erfolgreich reserviert!'));
     }
@@ -140,15 +146,19 @@ class RoomController extends Controller
 
         [$start, $end] = $this->reservationWindow($validated);
         $purpose       = $this->assertWordLimit($validated['purpose'] ?? null);
-        $this->assertNoOverlap($reservation->reservable, $start, $end, $reservation->id);
 
-        // Objekt und Eigentuemer bleiben unveraendert - sonst liesse sich eine
-        // Buchung per Formularfeld einem anderen Konto unterschieben.
-        $reservation->update([
-            'starts_at' => $start,
-            'ends_at'   => $end,
-            'purpose'   => $purpose,
-        ]);
+        DB::transaction(function () use ($reservation, $start, $end, $purpose) {
+            $this->lockReservable($reservation->reservable);
+            $this->assertNoOverlap($reservation->reservable, $start, $end, $reservation->id);
+
+            // Objekt und Eigentuemer bleiben unveraendert - sonst liesse sich eine
+            // Buchung per Formularfeld einem anderen Konto unterschieben.
+            $reservation->update([
+                'starts_at' => $start,
+                'ends_at'   => $end,
+                'purpose'   => $purpose,
+            ]);
+        });
 
         return redirect()->route('reservations.index')
             ->with('status', __('Reservierung erfolgreich aktualisiert!'));
